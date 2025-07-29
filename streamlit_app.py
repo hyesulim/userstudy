@@ -22,7 +22,9 @@ if "responses" not in st.session_state:
     st.session_state.responses = {}
 
 # === Google Sheets Connector ===
-def connect_to_worksheet():
+@st.cache_resource
+def get_worksheet():
+    """Cached Google Sheets connection"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     json_creds = st.secrets["gcp"]["gsheet_credentials"]
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmpfile:
@@ -40,10 +42,17 @@ def is_question_completed(q_id):
     return len(st.session_state.responses.get(q_id, [])) > 0
 
 def get_completion_status():
-    """Get completion status for all questions"""
-    completed = sum(1 for i in range(1, num_questions + 1) 
-                   if is_question_completed(f"q{i}"))
-    return completed, num_questions
+    """Get completion status for all questions - cached version"""
+    if "completion_cache" not in st.session_state:
+        completed = sum(1 for i in range(1, num_questions + 1) 
+                       if is_question_completed(f"q{i}"))
+        st.session_state.completion_cache = completed
+    return st.session_state.completion_cache, num_questions
+
+def update_completion_cache():
+    """Update completion cache when responses change"""
+    if "completion_cache" in st.session_state:
+        del st.session_state.completion_cache
 
 @st.dialog("📋 Review Your Answers")
 def show_confirmation_dialog():
@@ -67,7 +76,7 @@ def show_confirmation_dialog():
 
     if col1.button("✅ Confirm & Submit", type="primary"):
         try:
-            sheet = connect_to_worksheet()
+            sheet = get_worksheet()
             row = [datetime.now().isoformat(), name]
             for i in range(1, num_questions + 1):
                 ans = ",".join(st.session_state.responses.get(f"q{i}", []))
@@ -114,8 +123,9 @@ with nav_col:
             button_color = "secondary"
         
         if col.button(button_label, key=f"nav_{i}", type=button_color):
-            st.session_state.current_q = i
-            st.rerun()
+            if st.session_state.current_q != i:  # Only rerun if actually changing questions
+                st.session_state.current_q = i
+                st.rerun()
 
 with submit_col:
     st.markdown("### Submit")
@@ -191,10 +201,11 @@ with options_col:
 
     for idx, opt in enumerate(options):
         with cols[idx % 2]:
+            current_value = opt in st.session_state.responses[q_id]
             checked = st.checkbox(
                 opt,
                 key=f"{q_id}_{opt}",
-                value=(opt in st.session_state.responses[q_id])
+                value=current_value
             )
             if checked:
                 selected_options.append(opt)
@@ -206,32 +217,25 @@ with options_col:
             value=("None of the above" in st.session_state.responses[q_id])
         )
 
-    # Validation
-    if len(selected_options) == 0 and not none_selected:
-        st.error("⚠️ Please select at least one option or 'None of the above'.")
-        st.session_state.responses[q_id] = []
-        can_proceed = False
-    elif len(selected_options) > 0 and none_selected:
-        st.error("⚠️ Cannot select both A–F and 'None of the above'.")
-        st.session_state.responses[q_id] = []
-        can_proceed = False
-    else:
-        st.session_state.responses[q_id] = (
-            ["None of the above"] if none_selected else selected_options
-        )
-        can_proceed = True
+    # Save current selections to session state
+    new_response = ["None of the above"] if none_selected else selected_options
+    # Only update if response actually changed
+    if st.session_state.responses.get(q_id, []) != new_response:
+        st.session_state.responses[q_id] = new_response
+        update_completion_cache()  # Update cache when responses change
 
-    # Next/Submit button
-    if can_proceed:
-        if q < num_questions:
-            # Not the last question - show Next button
-            if st.button("➡️ Next Question", type="primary"):
+    
+    if st.button("Proceed"):
+        # Validation only when button is clicked
+        if len(selected_options) == 0 and not none_selected:
+            st.error("⚠️ Please select at least one option or 'None of the above'.")
+        elif len(selected_options) > 0 and none_selected:
+            st.error("⚠️ Cannot select both A–F and 'None of the above'.")
+        else:
+            # Next/Submit button
+            if q < num_questions:
                 st.session_state.current_q = q + 1
                 st.rerun()
-        else:
-            # Last question - show completion message and force rerun to update navigation
-            st.success("✅ All questions completed! You can submit now.")
-            # Force a rerun to update the navigation immediately
-            if "last_q_completed" not in st.session_state:
-                st.session_state.last_q_completed = True
-                st.rerun()
+            else:
+                st.success("✅ All questions completed! You can submit now. Go to the submit section above ⬆️.")
+
