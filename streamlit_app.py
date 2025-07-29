@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import tempfile
 
 st.set_page_config(page_title="User Study Survey", layout="wide")
 st.title("📝 User Study Survey")
@@ -14,12 +15,32 @@ satisfaction = st.radio("3. How satisfied are you?",
 feedback = st.text_area("4. Any additional feedback?")
 
 # === Google Sheet Setup ===
+# def connect_to_worksheet():
+#     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+#     creds = ServiceAccountCredentials.from_json_keyfile_name("CREDENTIALS.json", scope)
+#     client = gspread.authorize(creds)
+#     spreadsheet = client.open("userstudy")  # name of the spreadsheet
+#     worksheet = spreadsheet.sheet1  # or use get_worksheet(index) if you have multiple tabs
+#     return worksheet
+
 def connect_to_worksheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("CREDENTIALS.json", scope)
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    # Load credentials from Streamlit secrets
+    json_creds = st.secrets["gcp"]["gsheet_credentials"]
+
+    # Save to temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmpfile:
+        tmpfile.write(json_creds)
+        tmpfile.flush()
+        creds = ServiceAccountCredentials.from_json_keyfile_name(tmpfile.name, scope)
+
     client = gspread.authorize(creds)
-    spreadsheet = client.open("userstudy")  # name of the spreadsheet
-    worksheet = spreadsheet.sheet1  # or use get_worksheet(index) if you have multiple tabs
+    spreadsheet = client.open("userstudy")  # Or use open_by_key() if preferred
+    worksheet = spreadsheet.sheet1
     return worksheet
 
 # === Submission ===
